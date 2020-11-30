@@ -1,0 +1,66 @@
+/***
+*	Headcrab Frenzy Public Source Code
+*
+*	Copyright (c) 2010, Chain Studios. All rights reserved.
+*	
+****/
+#pragma once
+
+//=========================================================
+// HCF Game Settings
+//=========================================================
+#define HCF_NUM_HEADCRAB_TYPES							4
+#define HCF_START_LIVES									5
+#define HCF_HEADCRAB_SCORE								10
+#define HCF_HEADCRAB_BURN_SCORE							20
+#define HCF_HEADCRAB_NICECATCH_SCORE					50
+#define HCF_WARMUP										3
+
+#define HCF_RAMPAGE_FRAGS								60
+#define HCF_RAMPAGE_SCORE								100
+#define HCF_UNSTOPPABLE_FRAGS							90
+#define HCF_UNSTOPPABLE_SCORE							300
+
+#define HCF_EXTRALIFE_FRAGS								100
+#define HCF_LIFE_REGEN									2
+#define HCF_HEALTH_BONUS								20
+#define HCF_HEALTH_BONUS_FRAGS							40
+#define HCF_PARALYZE_SPEED								120
+#define HCF_KILL_FRENZY_BONUS							2.0f
+#define HCF_FRENZY_TIME									10.0f
+
+#define HCF_MAX_MONSTERMAKER_ALIVE_HEADCRABS			6
+#define HCF_MONSTERMAKER_UPGRADE_DELAY					20.0f
+#define HCF_MONSTERMAKER_UPGRADETYPE_DELAY				60.0f
+#define HCF_MONSTERMAKER_UPGRADE_HEALTHSCALE			1.35f
+#define HCF_MONSTERMAKER_UPGRADE_DAMAGESCALE			1.1f
+#define HCF_MONSTERMAKER_UPGRADE_MAXHEALTHSCALE			50.0f
+
+#define HCF_WEAPON_UPGRADE_DELAY						50.0f
+#define HCF_WEAPON_UPGRADE_VALUE						0.1f
+
+#define HCF_COMBO_DELAY									0.65f
+
+#define HCF_COMBO_DAMAGE_INCREASE_DOUBLEKILL			2.0f
+#define HCF_COMBO_DAMAGE_INCREASE_TRIPLEKILL			1.5f
+#define HCF_COMBO_DAMAGE_INCREASE_MULTIKILL				1.0f
+#define HCF_COMBO_DAMAGE_INCREASE_MEGAKILL				0.75f
+#define HCF_COMBO_DAMAGE_INCREASE_ULTRAKILL				0.5f
+#define HCF_COMBO_DAMAGE_INCREASE_MONSTERKILL			0.25f
+#define HCF_COMBO_DAMAGE_INCREASE_GODLIKE				0.15f
+
+#define HCF_COMBO_SCORE_MULT_DOUBLEKILL					1.5f
+#define HCF_COMBO_SCORE_MULT_TRIPLEKILL					3.0f
+#define HCF_COMBO_SCORE_MULT_MULTIKILL					6.0f
+#define HCF_COMBO_SCORE_MULT_MEGAKILL					9.0f
+#define HCF_COMBO_SCORE_MULT_ULTRAKILL					12.0f
+#define HCF_COMBO_SCORE_MULT_MONSTERKILL				16.0f
+#define HCF_COMBO_SCORE_MULT_GODLIKE					20.0f
+
+#define HCF_PASSIVE_HEADRAB_REMOVE_DELAY				120.0f
+
+#define HCF_POWERUP_RESPAWN_TIME						60.0f
+#define HCF_POWERUP_RESPAWN_TIME_RANDOM					8.0f
+#define HCF_POWERUP_ACTIVE_TIME							20.0f
+
+#define HCF_HEADCRAB_BITE_TEAMSCORE						15.0f

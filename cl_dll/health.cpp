@@ -1,0 +1,704 @@
+/***
+*
+*	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
+*	
+*	This product contains software technology licensed from Id 
+*	Software, Inc. ("Id Technology").  Id Technology (c) 1996 Id Software, Inc. 
+*	All Rights Reserved.
+*
+*   Use, distribution, and modification of this source code and/or resulting
+*   object code is restricted to non-commercial enhancements to products from
+*   Valve LLC.  All other use, distribution, or modification is prohibited
+*   without written permission from Valve LLC.
+*
+****/
+//
+// Health.cpp
+//
+// implementation of CHudHealth class
+//
+
+#include "STDIO.H"
+#include "STDLIB.H"
+#include "MATH.H"
+
+#include "hud.h"
+#include "cl_util.h"
+#include "parsemsg.h"
+#include <string.h>
+
+#include "ammohistory.h"
+
+extern WeaponsResource gWR;
+
+vec3_t g_vecPowerupColors[POWERUP_MAX_COUNT] = 
+{
+	vec3_t( 255, 0, 0 ),
+	vec3_t( 0, 0, 255 ),
+	vec3_t( 0, 255, 0 ),
+};
+
+char *g_szPowerupTitles[POWERUP_MAX_COUNT] = 
+{
+	"INVULNERABILITY",
+	"INVISIBILITY",
+	"REGENERATION"
+};
+
+DECLARE_MESSAGE(m_Health, Health )
+DECLARE_MESSAGE(m_Health, Damage )
+DECLARE_MESSAGE(m_Health, Frenzy )
+DECLARE_MESSAGE(m_Health, Powerup )
+
+#define PAIN_NAME "sprites/%d_pain.spr"
+#define DAMAGE_NAME "sprites/%d_dmg.spr"
+
+int giDmgHeight, giDmgWidth;
+
+int giDmgFlags[NUM_DMG_TYPES] = 
+{
+	DMG_POISON,
+	DMG_ACID,
+	DMG_FREEZE|DMG_SLOWFREEZE,
+	DMG_DROWN,
+	DMG_BURN|DMG_SLOWBURN,
+	DMG_NERVEGAS, 
+	DMG_RADIATION,
+	DMG_SHOCK,
+	DMG_CALTROP,
+	DMG_TRANQ,
+	DMG_CONCUSS,
+	DMG_HALLUC
+};
+
+int CHudHealth::Init(void)
+{
+	HOOK_MESSAGE(Health);
+	HOOK_MESSAGE(Damage);
+	HOOK_MESSAGE(Frenzy);
+	HOOK_MESSAGE(Powerup);
+
+	m_iHealth = 100;
+	m_iFrenzy = 0;
+	m_fFade = 0;
+	m_fFade2 = 0;
+	m_iFlags = 0;
+	m_bitsDamage = 0;
+	m_fAttackFront = m_fAttackRear = m_fAttackRight = m_fAttackLeft = 0;
+	giDmgHeight = 0;
+	giDmgWidth = 0;
+	m_flPulseAlpha = MIN_ALPHA;
+	m_iPulseDir = 0;
+
+	memset(m_dmg, 0, sizeof(DAMAGE_IMAGE) * NUM_DMG_TYPES);
+	memset(m_iPowerups, 0, sizeof(m_iPowerups));
+
+	gHUD.AddHudElem(this);
+
+	return 1;
+}
+
+void CHudHealth::Reset( void )
+{
+	// make sure the pain compass is cleared when the player respawns
+	m_fAttackFront = m_fAttackRear = m_fAttackRight = m_fAttackLeft = 0;
+
+	m_flPulseAlpha = MIN_ALPHA;
+	m_iPulseDir = 0;
+
+	memset(m_iPowerups, 0, sizeof(m_iPowerups));
+
+	// force all the flashing damage icons to expire
+	m_bitsDamage = 0;
+	for ( int i = 0; i < NUM_DMG_TYPES; i++ )
+	{
+		m_dmg[i].fExpire = 0;
+	}
+}
+
+int CHudHealth::VidInit(void)
+{
+	int HUD_suit_empty = gHUD.GetSpriteIndex( "suit_empty" );
+	int HUD_suit_full = gHUD.GetSpriteIndex( "suit_full" );
+
+	m_hSprite1 = m_hSprite2 = 0;  // delaying get sprite handles until we know the sprites are loaded
+
+	m_hSprite = 0;
+
+	m_HUD_dmg_bio = gHUD.GetSpriteIndex( "dmg_bio" ) + 1;
+	m_HUD_cross = gHUD.GetSpriteIndex( "cross" );
+
+	giDmgHeight = gHUD.GetSpriteRect(m_HUD_dmg_bio).right - gHUD.GetSpriteRect(m_HUD_dmg_bio).left;
+	giDmgWidth = gHUD.GetSpriteRect(m_HUD_dmg_bio).bottom - gHUD.GetSpriteRect(m_HUD_dmg_bio).top;
+
+	m_prc1 = &gHUD.GetSpriteRect( HUD_suit_empty );
+	m_prc2 = &gHUD.GetSpriteRect( HUD_suit_full );
+	m_iHeight = m_prc2->bottom - m_prc1->top;
+
+	return 1;
+}
+
+int CHudHealth:: MsgFunc_Health(const char *pszName,  int iSize, void *pbuf )
+{
+	// TODO: update local health data
+	BEGIN_READ( pbuf, iSize );
+	int x = READ_SHORT();
+
+	if (x > 999)
+		x = 999;
+
+	m_iFlags |= HUD_ACTIVE;
+
+	// Only update the fade if we've changed health
+	if (x != m_iHealth)
+	{
+		m_fFade = FADE_TIME;
+		m_iHealth = x;
+	}
+
+	return 1;
+}
+
+int CHudHealth:: MsgFunc_Frenzy(const char *pszName,  int iSize, void *pbuf )
+{
+	BEGIN_READ( pbuf, iSize );
+	m_iFrenzy = READ_BYTE();
+
+	if (m_iFrenzy > 100)
+		m_iFrenzy = 99;
+
+	m_iFlags |= HUD_ACTIVE;
+
+	return 1;
+}
+
+int CHudHealth:: MsgFunc_Powerup(const char *pszName,  int iSize, void *pbuf )
+{
+	BEGIN_READ( pbuf, iSize );
+	
+	int iPowerup = READ_BYTE();
+	int iValue = READ_BYTE();
+
+	if (iPowerup >= 0 && iPowerup < POWERUP_MAX_COUNT)
+	{
+		if (iValue < 0)
+			iValue = 0;
+		else if (iValue > 255)
+			iValue = 255;
+
+		if (iValue != m_iPowerups[iPowerup])
+		{
+			m_fFade2 = FADE_TIME;
+			m_iPowerups[iPowerup] = iValue;
+		}
+	}
+
+	if (iValue > 0)
+		m_iFlags |= HUD_ACTIVE;
+
+	return 1;
+
+}
+
+int CHudHealth:: MsgFunc_Damage(const char *pszName,  int iSize, void *pbuf )
+{
+	BEGIN_READ( pbuf, iSize );
+
+	int armor = READ_BYTE();	// armor
+	int damageTaken = READ_BYTE();	// health
+	long bitsDamage = READ_LONG(); // damage bits
+
+	vec3_t vecFrom;
+
+	for ( int i = 0 ; i < 3 ; i++)
+		vecFrom[i] = READ_COORD();
+
+	UpdateTiles(gHUD.m_flTime, bitsDamage);
+
+	// Actually took damage?
+	if ( damageTaken > 0 || armor > 0 )
+		CalcDamageDirection(vecFrom);
+
+	return 1;
+}
+
+
+// Returns back a color from the
+// Green <-> Yellow <-> Red ramp
+void CHudHealth::GetPainColor( int &r, int &g, int &b )
+{
+	int iHealth = m_iHealth;
+
+	if (iHealth > 25)
+		iHealth -= 25;
+	else if ( iHealth < 0 )
+		iHealth = 0;
+#if 0
+	g = iHealth * 255 / 100;
+	r = 255 - g;
+	b = 0;
+#else
+	if (m_iHealth > 25)
+	{
+		UnpackRGB(r,g,b, RGB_YELLOWISH);
+	}
+	else
+	{
+		r = 250;
+		g = 0;
+		b = 0;
+	}
+#endif 
+}
+
+int CHudHealth::Draw(float flTime)
+{
+	int r, g, b;
+	int a = 0, x, y;
+	int a2 = 0;
+	int HealthWidth;
+
+	if ( (gHUD.m_iHideHUDDisplay & HIDEHUD_HEALTH) || gEngfuncs.IsSpectateOnly() )
+		return 1;
+
+	if ( !m_hSprite )
+		m_hSprite = LoadSprite(PAIN_NAME);
+	
+	// Has health changed? Flash the health #
+	if (m_fFade)
+	{
+		m_fFade -= (gHUD.m_flTimeDelta * 20);
+		if (m_fFade <= 0)
+		{
+			a = MIN_ALPHA;
+			m_fFade = 0;
+		}
+
+		// Fade the health number back to dim
+
+		a = MIN_ALPHA +  (m_fFade/FADE_TIME) * 128;
+
+	}
+	else
+		a = MIN_ALPHA;
+
+	if (m_fFade2)
+	{
+		m_fFade2 -= (gHUD.m_flTimeDelta * 70);
+		if (m_fFade2 <= 0)
+		{
+			a2 = MIN_ALPHA;
+			m_fFade2 = 0;
+		}
+
+		// Fade the health number back to dim
+
+		a2 = MIN_ALPHA + (m_fFade2/FADE_TIME) * 128;
+
+	}
+	else
+		a2 = MIN_ALPHA;
+
+	// If health is getting low, make it bright red
+	if (m_iHealth <= 15)
+		a = 255;
+		
+	GetPainColor( r, g, b );
+	ScaleColors(r, g, b, a );
+
+	// Only draw health if we have the suit.
+	if (gHUD.m_iWeaponBits & (1<<(WEAPON_SUIT)))
+	{
+		HealthWidth = gHUD.GetSpriteRect(gHUD.m_HUD_number_0).right - gHUD.GetSpriteRect(gHUD.m_HUD_number_0).left;
+		int CrossWidth = gHUD.GetSpriteRect(m_HUD_cross).right - gHUD.GetSpriteRect(m_HUD_cross).left;
+
+		y = ScreenHeight - gHUD.m_iFontHeight - gHUD.m_iFontHeight / 2;
+		x = CrossWidth /2;
+
+		SPR_Set(gHUD.GetSprite(m_HUD_cross), r, g, b);
+		SPR_DrawAdditive(0, x, y, &gHUD.GetSpriteRect(m_HUD_cross));
+
+		x = CrossWidth + HealthWidth / 2;
+
+		x = gHUD.DrawHudNumber(x, y, DHN_3DIGITS | DHN_DRAWZERO, m_iHealth, r, g, b);
+	}
+
+	//Draw powerup icons
+	int digitWide = gHUD.GetSpriteRect(gHUD.m_HUD_number_0).right - gHUD.GetSpriteRect(gHUD.m_HUD_number_0).left;
+	int iIconX = ScreenWidth - XRES(6) - (m_prc1->right - m_prc1->left) - digitWide*3;
+	int iIconY = ScreenHeight / 3;
+
+	for (int i = 0; i < POWERUP_MAX_COUNT; i++)
+	{
+		if (!m_iPowerups[i])
+			continue;
+
+		r = g_vecPowerupColors[i][0];
+		g = g_vecPowerupColors[i][1];
+		b = g_vecPowerupColors[i][2];
+
+		ScaleColors(r, g, b, a2 );
+
+		float powRatio = ((float)(255-m_iPowerups[i])) * (1.0f / 255.0f);
+
+		wrect_t rc;
+		rc = *m_prc2;
+		rc.top += m_iHeight * powRatio;
+
+		// make sure we have the right sprite handles
+		if ( !m_hSprite1 )
+			m_hSprite1 = gHUD.GetSprite( gHUD.GetSpriteIndex( "suit_empty" ) );
+		if ( !m_hSprite2 )
+			m_hSprite2 = gHUD.GetSprite( gHUD.GetSpriteIndex( "suit_full" ) );
+
+		int iOffset = (m_prc1->bottom - m_prc1->top)/6;
+
+		SPR_Set(m_hSprite1, r,g,b );
+		SPR_DrawAdditive( 0, iIconX, iIconY - iOffset, m_prc1);
+
+		if (rc.bottom > rc.top)
+		{
+			SPR_Set(m_hSprite2, r,g,b );
+			SPR_DrawAdditive( 0, iIconX, iIconY - iOffset + (rc.top - m_prc2->top), &rc);
+		}
+
+		int realValue = ceil(20.0f * (1.0f - powRatio));
+
+		int nx = gHUD.DrawHudNumber(iIconX + (m_prc1->right - m_prc1->left), iIconY, DHN_3DIGITS | DHN_DRAWZERO, realValue, r,g,b );
+
+		r = g_vecPowerupColors[i][0];
+		g = g_vecPowerupColors[i][1];
+		b = g_vecPowerupColors[i][2];
+
+		ScaleColors(r, g, b, a );
+
+		int strSize = 0;
+		int strLen = strlen(g_szPowerupTitles[i]);
+
+		// iterate through the string in reverse
+		for ( int j = 0; j < strLen; j++ )	
+		{
+			strSize += gHUD.m_scrinfo.charWidths[ g_szPowerupTitles[i][j] ];
+		}
+
+		int strXOfs = ((nx - iIconX) - strSize) * 0.5f;
+		if (iIconX + strXOfs + strSize + XRES(4) > ScreenWidth)
+			strXOfs = ScreenWidth - strSize - XRES(4) - iIconX;
+
+		gHUD.DrawHudString( iIconX + strXOfs, iIconY - m_iHeight * 0.75f, ScreenWidth, g_szPowerupTitles[i], r, g, b );
+
+		iIconY += m_iHeight * 2.0f;
+	}
+
+	//Draw frenzy
+	if (gWR.GetWeaponSlot( 0, 0 ) && !(gHUD.m_iHideHUDDisplay & HIDEHUD_WEAPONS))
+	{
+		int iBarHeight = (YRES(84) * m_iFrenzy) / 100;
+
+		if (m_iFrenzy == 100)
+		{
+			r = 255;
+			g = 160;
+			b = 0;
+			ScaleColors(r, g, b, MIN_ALPHA );
+		}
+		else
+		{
+			UnpackRGB(r,g,b, RGB_YELLOWISH);
+			ScaleColors(r, g, b, MIN_ALPHA );
+		}
+
+		x = ScreenWidth - 90;
+		y = ScreenHeight - gHUD.m_iFontHeight - gHUD.m_iFontHeight / 2;
+
+		gHUD.DrawHudString( x, y, x + 90, "FRENZY", r, g, b );
+
+		//draw frenzy bar
+		if (m_iFrenzy == 100)
+		{
+			r = 255;
+			g = 160;
+			b = 0;
+
+			if (!m_iPulseDir)
+			{
+				if (m_flPulseAlpha < 255)
+					m_flPulseAlpha += 400 * gHUD.m_flTimeDelta;
+				if (m_flPulseAlpha >= 255)
+				{
+					m_flPulseAlpha = 255;
+					m_iPulseDir = 1;
+				}
+			}
+			else
+			{
+				if (m_flPulseAlpha > MIN_ALPHA)
+					m_flPulseAlpha -= 400 * gHUD.m_flTimeDelta;
+				if (m_flPulseAlpha <= MIN_ALPHA)
+				{
+					m_flPulseAlpha = MIN_ALPHA;
+					m_iPulseDir = 0;
+				}
+			}
+
+			ScaleColors(r, g, b, m_flPulseAlpha );
+		}
+
+		x = ScreenWidth - 75;
+		y = ScreenHeight - gHUD.m_iFontHeight - gHUD.m_iFontHeight / 2 - YRES(94);
+
+		FillRGBA(x, y + 2, 2, YRES(84)+2, r, g, b, a);
+		FillRGBA(x + XRES(9)+4, y + 2, 2, YRES(84)+2, r, g, b, a);
+		FillRGBA(x, y, XRES(9)+6, 2, r, g, b, a);
+		FillRGBA(x, y + YRES(84)+4, XRES(9)+6, 2, r, g, b, a);
+
+		
+		if (iBarHeight > 0)
+			FillRGBA(x + 3, y + 3 + (YRES(84) - iBarHeight), XRES(9), iBarHeight, r, g, b, a);
+
+	}
+
+
+	DrawDamage(flTime);
+	return DrawPain(flTime);
+}
+
+void CHudHealth::CalcDamageDirection(vec3_t vecFrom)
+{
+	vec3_t	forward, right, up;
+	float	side, front;
+	vec3_t vecOrigin, vecAngles;
+
+	if (!vecFrom[0] && !vecFrom[1] && !vecFrom[2])
+	{
+		m_fAttackFront = m_fAttackRear = m_fAttackRight = m_fAttackLeft = 0;
+		return;
+	}
+
+
+	memcpy(vecOrigin, gHUD.m_vecOrigin, sizeof(vec3_t));
+	memcpy(vecAngles, gHUD.m_vecAngles, sizeof(vec3_t));
+
+
+	VectorSubtract (vecFrom, vecOrigin, vecFrom);
+
+	float flDistToTarget = vecFrom.Length();
+
+	vecFrom = vecFrom.Normalize();
+	AngleVectors (vecAngles, forward, right, up);
+
+	front = DotProduct (vecFrom, right);
+	side = DotProduct (vecFrom, forward);
+
+	if (flDistToTarget <= 50)
+	{
+		m_fAttackFront = m_fAttackRear = m_fAttackRight = m_fAttackLeft = 1;
+	}
+	else 
+	{
+		if (side > 0)
+		{
+			if (side > 0.3)
+				m_fAttackFront = max(m_fAttackFront, side);
+		}
+		else
+		{
+			float f = fabs(side);
+			if (f > 0.3)
+				m_fAttackRear = max(m_fAttackRear, f);
+		}
+
+		if (front > 0)
+		{
+			if (front > 0.3)
+				m_fAttackRight = max(m_fAttackRight, front);
+		}
+		else
+		{
+			float f = fabs(front);
+			if (f > 0.3)
+				m_fAttackLeft = max(m_fAttackLeft, f);
+		}
+	}
+}
+
+int CHudHealth::DrawPain(float flTime)
+{
+	if (!(m_fAttackFront || m_fAttackRear || m_fAttackLeft || m_fAttackRight))
+		return 1;
+
+	int r, g, b;
+	int x, y, a, shade;
+
+	// TODO:  get the shift value of the health
+	a = 255;	// max brightness until then
+
+	float fFade = gHUD.m_flTimeDelta * 2;
+	
+	// SPR_Draw top
+	if (m_fAttackFront > 0.4)
+	{
+		GetPainColor(r,g,b);
+		shade = a * max( m_fAttackFront, 0.5 );
+		ScaleColors(r, g, b, shade);
+		SPR_Set(m_hSprite, r, g, b );
+
+		x = ScreenWidth/2 - SPR_Width(m_hSprite, 0)/2;
+		y = ScreenHeight/2 - SPR_Height(m_hSprite,0) * 3;
+		SPR_DrawAdditive(0, x, y, NULL);
+		m_fAttackFront = max( 0, m_fAttackFront - fFade );
+	} else
+		m_fAttackFront = 0;
+
+	if (m_fAttackRight > 0.4)
+	{
+		GetPainColor(r,g,b);
+		shade = a * max( m_fAttackRight, 0.5 );
+		ScaleColors(r, g, b, shade);
+		SPR_Set(m_hSprite, r, g, b );
+
+		x = ScreenWidth/2 + SPR_Width(m_hSprite, 1) * 2;
+		y = ScreenHeight/2 - SPR_Height(m_hSprite,1)/2;
+		SPR_DrawAdditive(1, x, y, NULL);
+		m_fAttackRight = max( 0, m_fAttackRight - fFade );
+	} else
+		m_fAttackRight = 0;
+
+	if (m_fAttackRear > 0.4)
+	{
+		GetPainColor(r,g,b);
+		shade = a * max( m_fAttackRear, 0.5 );
+		ScaleColors(r, g, b, shade);
+		SPR_Set(m_hSprite, r, g, b );
+
+		x = ScreenWidth/2 - SPR_Width(m_hSprite, 2)/2;
+		y = ScreenHeight/2 + SPR_Height(m_hSprite,2) * 2;
+		SPR_DrawAdditive(2, x, y, NULL);
+		m_fAttackRear = max( 0, m_fAttackRear - fFade );
+	} else
+		m_fAttackRear = 0;
+
+	if (m_fAttackLeft > 0.4)
+	{
+		GetPainColor(r,g,b);
+		shade = a * max( m_fAttackLeft, 0.5 );
+		ScaleColors(r, g, b, shade);
+		SPR_Set(m_hSprite, r, g, b );
+
+		x = ScreenWidth/2 - SPR_Width(m_hSprite, 3) * 3;
+		y = ScreenHeight/2 - SPR_Height(m_hSprite,3)/2;
+		SPR_DrawAdditive(3, x, y, NULL);
+
+		m_fAttackLeft = max( 0, m_fAttackLeft - fFade );
+	} else
+		m_fAttackLeft = 0;
+
+	return 1;
+}
+
+int CHudHealth::DrawDamage(float flTime)
+{
+	int r, g, b, a;
+	DAMAGE_IMAGE *pdmg;
+
+	if (!m_bitsDamage)
+		return 1;
+
+	UnpackRGB(r,g,b, RGB_YELLOWISH);
+	
+	a = (int)( fabs(sin(flTime*2)) * 256.0);
+
+	ScaleColors(r, g, b, a);
+
+	// Draw all the items
+	for (int i = 0; i < NUM_DMG_TYPES; i++)
+	{
+		if (m_bitsDamage & giDmgFlags[i])
+		{
+			pdmg = &m_dmg[i];
+			SPR_Set(gHUD.GetSprite(m_HUD_dmg_bio + i), r, g, b );
+			SPR_DrawAdditive(0, pdmg->x, pdmg->y, &gHUD.GetSpriteRect(m_HUD_dmg_bio + i));
+		}
+	}
+
+
+	// check for bits that should be expired
+	for ( i = 0; i < NUM_DMG_TYPES; i++ )
+	{
+		DAMAGE_IMAGE *pdmg = &m_dmg[i];
+
+		if ( m_bitsDamage & giDmgFlags[i] )
+		{
+			pdmg->fExpire = min( flTime + DMG_IMAGE_LIFE, pdmg->fExpire );
+
+			if ( pdmg->fExpire <= flTime		// when the time has expired
+				&& a < 40 )						// and the flash is at the low point of the cycle
+			{
+				pdmg->fExpire = 0;
+
+				int y = pdmg->y;
+				pdmg->x = pdmg->y = 0;
+
+				// move everyone above down
+				for (int j = 0; j < NUM_DMG_TYPES; j++)
+				{
+					pdmg = &m_dmg[j];
+					if ((pdmg->y) && (pdmg->y < y))
+						pdmg->y += giDmgHeight;
+
+				}
+
+				m_bitsDamage &= ~giDmgFlags[i];  // clear the bits
+			}
+		}
+	}
+
+	return 1;
+}
+ 
+
+void CHudHealth::UpdateTiles(float flTime, long bitsDamage)
+{	
+	DAMAGE_IMAGE *pdmg;
+
+	// Which types are new?
+	long bitsOn = ~m_bitsDamage & bitsDamage;
+	
+	for (int i = 0; i < NUM_DMG_TYPES; i++)
+	{
+		pdmg = &m_dmg[i];
+
+		// Is this one already on?
+		if (m_bitsDamage & giDmgFlags[i])
+		{
+			pdmg->fExpire = flTime + DMG_IMAGE_LIFE; // extend the duration
+			if (!pdmg->fBaseline)
+				pdmg->fBaseline = flTime;
+		}
+
+		// Are we just turning it on?
+		if (bitsOn & giDmgFlags[i])
+		{
+			// put this one at the bottom
+			pdmg->x = giDmgWidth/8;
+			pdmg->y = ScreenHeight - giDmgHeight * 2;
+			pdmg->fExpire=flTime + DMG_IMAGE_LIFE;
+			
+			// move everyone else up
+			for (int j = 0; j < NUM_DMG_TYPES; j++)
+			{
+				if (j == i)
+					continue;
+
+				pdmg = &m_dmg[j];
+				if (pdmg->y)
+					pdmg->y -= giDmgHeight;
+
+			}
+			pdmg = &m_dmg[i];
+		}	
+	}	
+
+	// damage bits are only turned on here;  they are turned off when the draw time has expired (in DrawDamage())
+	m_bitsDamage |= bitsDamage;
+}
